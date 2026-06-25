@@ -41,7 +41,8 @@
           <button @click="newProject">新規</button>
           <button @click="saveProject">保存</button>
           <button @click="triggerLoad">読み込み</button>
-          <button class="btn-export" @click="onExport">ESP32へ書き込む</button>
+          <button class="btn-export" @click="onExport">esptoolで書き込む</button>
+          <button class="btn-serial" @click="showSerialModal = true">WebSerial転送</button>
           <input ref="fileInputRef" type="file" accept=".ledproj" style="display:none" @change="onFileLoad" />
         </div>
       </div>
@@ -74,6 +75,9 @@
         <LayoutEditor v-show="rightTab === 'layout'" class="pane-content" />
       </div>
     </div>
+
+    <!-- WebSerial 転送モーダル -->
+    <WebSerialTransfer v-if="showSerialModal" @close="showSerialModal = false" />
 
     <!-- esptool 手順モーダル -->
     <div v-if="showExportModal" class="modal-overlay" @click.self="showExportModal = false">
@@ -130,6 +134,7 @@ import { useProject } from './composables/useProject.js'
 import TimelineEditor from './components/TimelineEditor.vue'
 import Simulator from './components/Simulator.vue'
 import LayoutEditor from './components/LayoutEditor.vue'
+import WebSerialTransfer from './components/WebSerialTransfer.vue'
 
 const {
   project,
@@ -148,6 +153,7 @@ const {
 
 const fileInputRef = ref(null)
 const rightTab = ref('simulator')
+const showSerialModal = ref(false)
 const showExportModal = ref(false)
 const exportedFileName = ref('')
 const flashAddrHex = computed(() => `0x${LED_DATA_FLASH_ADDR.toString(16)}`)
@@ -310,6 +316,14 @@ onUnmounted(() => {
 
 .btn-export:hover {
   background: #388e3c !important;
+}
+
+.btn-serial {
+  background: #5a3a00 !important;
+}
+
+.btn-serial:hover {
+  background: #7a5000 !important;
 }
 
 .error-banner {
