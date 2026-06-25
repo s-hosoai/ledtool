@@ -1,0 +1,27 @@
+menu "LED WiFi Player Configuration"
+
+    config WIFI_SSID
+        string "WiFi SSID"
+        default "your_wifi_ssid"
+        help
+            接続先WiFiのSSID。idf.py menuconfigで設定してください。
+
+    config WIFI_PASSWORD
+        string "WiFi Password"
+        default "your_wifi_password"
+        help
+            接続先WiFiのパスワード。
+
+    config LED_STRIP_GPIO
+        int "WS2812B GPIO番号"
+        default 48
+        help
+            WS2812BのデータラインのGPIO番号（ESP32-S3デフォルト: 48）。
+
+    config WS_PORT
+        int "WebSocketサーバーポート"
+        default 80
+        help
+            HTTPサーバーのリッスンポート。ブラウザからws://<IP>/wsで接続。
+
+endmenu

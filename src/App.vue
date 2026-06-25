@@ -43,6 +43,7 @@
           <button @click="triggerLoad">読み込み</button>
           <button class="btn-export" @click="onExport">esptoolで書き込む</button>
           <button class="btn-serial" @click="showSerialModal = true">WebSerial転送</button>
+          <button class="btn-wifi" @click="showWifiModal = true">WiFi転送</button>
           <input ref="fileInputRef" type="file" accept=".ledproj" style="display:none" @change="onFileLoad" />
         </div>
       </div>
@@ -78,6 +79,9 @@
 
     <!-- WebSerial 転送モーダル -->
     <WebSerialTransfer v-if="showSerialModal" @close="showSerialModal = false" />
+
+    <!-- WiFi (WebSocket) 転送モーダル -->
+    <WebSocketTransfer v-if="showWifiModal" @close="showWifiModal = false" />
 
     <!-- esptool 手順モーダル -->
     <div v-if="showExportModal" class="modal-overlay" @click.self="showExportModal = false">
@@ -135,6 +139,7 @@ import TimelineEditor from './components/TimelineEditor.vue'
 import Simulator from './components/Simulator.vue'
 import LayoutEditor from './components/LayoutEditor.vue'
 import WebSerialTransfer from './components/WebSerialTransfer.vue'
+import WebSocketTransfer from './components/WebSocketTransfer.vue'
 
 const {
   project,
@@ -154,6 +159,7 @@ const {
 const fileInputRef = ref(null)
 const rightTab = ref('simulator')
 const showSerialModal = ref(false)
+const showWifiModal = ref(false)
 const showExportModal = ref(false)
 const exportedFileName = ref('')
 const flashAddrHex = computed(() => `0x${LED_DATA_FLASH_ADDR.toString(16)}`)
@@ -324,6 +330,14 @@ onUnmounted(() => {
 
 .btn-serial:hover {
   background: #7a5000 !important;
+}
+
+.btn-wifi {
+  background: #1a3a5a !important;
+}
+
+.btn-wifi:hover {
+  background: #2a5a8a !important;
 }
 
 .error-banner {
