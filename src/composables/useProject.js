@@ -171,6 +171,52 @@ function saveProject() {
   URL.revokeObjectURL(url)
 }
 
+// バイナリエクスポート（spec §7.2 フォーマット準拠）
+// パターンデータ書き込み先アドレス：0x200000（ESP32 4MB flash）
+const LED_DATA_FLASH_ADDR = 0x200000
+
+function exportBinary() {
+  const { fps, loop, frames } = state.project.pattern
+  const ledCount = state.project.layout.led_count
+  const frameCount = frames.length
+  const HEADER_SIZE = 16
+  const frameSize = ledCount * 3
+  const totalSize = HEADER_SIZE + frameSize * frameCount
+
+  const buffer = new ArrayBuffer(totalSize)
+  const view = new DataView(buffer)
+  const bytes = new Uint8Array(buffer)
+
+  // ヘッダ
+  view.setUint16(0x00, 0x4C45, true)            // マジック "LE"
+  view.setUint8(0x02, 0x01)                      // バージョン
+  view.setUint8(0x03, loop ? 0x01 : 0x00)        // フラグ（bit0: ループ）
+  view.setUint16(0x04, ledCount, true)            // LED数
+  view.setUint16(0x06, frameCount, true)          // フレーム数
+  view.setUint8(0x08, fps)                        // FPS
+  // 0x09〜0x0F: 予約（0x00埋め、ArrayBuffer初期値のまま）
+
+  // フレームデータ（GRB順）
+  for (let f = 0; f < frameCount; f++) {
+    const frame = frames[f]
+    for (let l = 0; l < ledCount; l++) {
+      const led = frame.leds[l]
+      const offset = HEADER_SIZE + f * frameSize + l * 3
+      bytes[offset + 0] = led.g  // G
+      bytes[offset + 1] = led.r  // R
+      bytes[offset + 2] = led.b  // B
+    }
+  }
+
+  const blob = new Blob([buffer], { type: 'application/octet-stream' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `${state.project.name}.led`
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
 function clearError() {
   state.errorMessage = null
 }
@@ -197,7 +243,9 @@ export function useProject() {
     setProjectName,
     loadProject,
     saveProject,
+    exportBinary,
     newProject,
     clearError,
+    LED_DATA_FLASH_ADDR,
   }
 }

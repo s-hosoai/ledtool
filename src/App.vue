@@ -41,6 +41,7 @@
           <button @click="newProject">新規</button>
           <button @click="saveProject">保存</button>
           <button @click="triggerLoad">読み込み</button>
+          <button class="btn-export" @click="onExport">ESP32へ書き込む</button>
           <input ref="fileInputRef" type="file" accept=".ledproj" style="display:none" @change="onFileLoad" />
         </div>
       </div>
@@ -55,17 +56,13 @@
     <!-- メインエリア（左右分割） -->
     <div class="main-area" ref="mainAreaRef">
       <!-- 左：タイムラインエディタ -->
-      <div class="pane pane-left" :style="{ width: leftWidth + 'px' }">
+      <div class="pane pane-left" :style="leftPaneStyle">
         <div class="pane-title">タイムライン</div>
         <TimelineEditor class="pane-content" />
       </div>
 
       <!-- ドラッグハンドル -->
-      <div
-        class="divider"
-        @mousedown="startDividerDrag"
-        title="ドラッグで幅を変更"
-      />
+      <div class="divider" @mousedown="startDividerDrag" title="ドラッグで幅を変更" />
 
       <!-- 右：シミュレーター -->
       <div class="pane pane-right">
@@ -73,30 +70,81 @@
         <Simulator class="pane-content" />
       </div>
     </div>
+
+    <!-- esptool 手順モーダル -->
+    <div v-if="showExportModal" class="modal-overlay" @click.self="showExportModal = false">
+      <div class="modal">
+        <div class="modal-header">
+          <span>ESP32への書き込み手順</span>
+          <button @click="showExportModal = false">✕</button>
+        </div>
+        <div class="modal-body">
+          <p class="modal-note">
+            <strong>{{ exportedFileName }}</strong> をダウンロードしました。<br>
+            以下の手順でESP32に書き込んでください。
+          </p>
+
+          <div class="step">
+            <div class="step-num">1</div>
+            <div class="step-content">
+              <div class="step-title">ファームウェアのビルド・書き込み（初回のみ）</div>
+              <pre class="code">cd firmware/player
+idf.py set-target esp32
+idf.py -p /dev/ttyUSB0 flash</pre>
+              <div class="step-hint">※ ESP32-S3の場合は <code>set-target esp32s3</code></div>
+            </div>
+          </div>
+
+          <div class="step">
+            <div class="step-num">2</div>
+            <div class="step-content">
+              <div class="step-title">パターンデータの書き込み</div>
+              <pre class="code">esptool.py --chip esp32 --port /dev/ttyUSB0 write_flash {{ flashAddrHex }} {{ exportedFileName }}</pre>
+              <div class="step-hint">※ ポートはOSによって異なります（Windows: COM3 など）</div>
+            </div>
+          </div>
+
+          <div class="step">
+            <div class="step-num">3</div>
+            <div class="step-content">
+              <div class="step-title">ESP32をリセット</div>
+              <div class="step-hint">書き込み完了後、ENボタンを押してリセットするとパターンが再生されます。</div>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button @click="showExportModal = false">閉じる</button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup>
-import { ref, onUnmounted } from 'vue'
+import { ref, computed, onUnmounted } from 'vue'
 import { useProject } from './composables/useProject.js'
 import TimelineEditor from './components/TimelineEditor.vue'
 import Simulator from './components/Simulator.vue'
 
 const {
   project,
+  errorMessage,
   setLedCount,
   setFps,
   setLoop,
   setProjectName,
   loadProject,
   saveProject,
+  exportBinary,
   newProject,
   clearError,
+  LED_DATA_FLASH_ADDR,
 } = useProject()
 
-// errorMessage は useProject から直接取得（computed ref）
-
 const fileInputRef = ref(null)
+const showExportModal = ref(false)
+const exportedFileName = ref('')
+const flashAddrHex = computed(() => `0x${LED_DATA_FLASH_ADDR.toString(16)}`)
 
 function onLedCountChange(e) {
   const v = parseInt(e.target.value)
@@ -116,9 +164,18 @@ function onFileLoad(e) {
   reader.readAsText(file)
 }
 
+function onExport() {
+  exportBinary()
+  exportedFileName.value = `${project.name}.led`
+  showExportModal.value = true
+}
+
 // 左右分割ドラッグ
 const mainAreaRef = ref(null)
-const leftWidth = ref(null)  // null = 50%
+const leftWidth = ref(null)
+const leftPaneStyle = computed(() =>
+  leftWidth.value !== null ? { width: leftWidth.value + 'px' } : { width: '50%' }
+)
 let isDragging = false
 let dragStartX = 0
 let dragStartWidth = 0
@@ -134,7 +191,7 @@ function startDividerDrag(e) {
 
 function onDividerMove(e) {
   if (!isDragging || !mainAreaRef.value) return
-  const totalW = mainAreaRef.value.offsetWidth - 6  // 6px = ハンドル幅
+  const totalW = mainAreaRef.value.offsetWidth - 6
   const newW = Math.max(200, Math.min(totalW - 200, dragStartWidth + (e.clientX - dragStartX)))
   leftWidth.value = newW
 }
@@ -241,6 +298,14 @@ onUnmounted(() => {
   background: #3a6fa5;
 }
 
+.btn-export {
+  background: #2e7d32 !important;
+}
+
+.btn-export:hover {
+  background: #388e3c !important;
+}
+
 .error-banner {
   display: flex;
   align-items: center;
@@ -306,4 +371,141 @@ onUnmounted(() => {
 .divider:hover {
   background: #444;
 }
+
+/* モーダル */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.modal {
+  background: #1e1e1e;
+  border: 1px solid #444;
+  border-radius: 6px;
+  width: 560px;
+  max-width: 90vw;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid #333;
+  font-size: 14px;
+  font-weight: bold;
+  color: #fff;
+}
+
+.modal-header button {
+  background: none;
+  border: none;
+  color: #888;
+  cursor: pointer;
+  font-size: 16px;
+  padding: 0 4px;
+}
+
+.modal-header button:hover { color: #fff; }
+
+.modal-body {
+  padding: 16px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.modal-note {
+  font-size: 13px;
+  color: #ccc;
+  line-height: 1.6;
+}
+
+.step {
+  display: flex;
+  gap: 12px;
+}
+
+.step-num {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: #2d5a8e;
+  color: #fff;
+  font-size: 12px;
+  font-weight: bold;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.step-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.step-title {
+  font-size: 13px;
+  font-weight: bold;
+  color: #ddd;
+}
+
+.step-hint {
+  font-size: 11px;
+  color: #888;
+}
+
+.code {
+  background: #0d0d0d;
+  border: 1px solid #333;
+  border-radius: 4px;
+  padding: 8px 10px;
+  font-family: monospace;
+  font-size: 12px;
+  color: #a8d8a8;
+  overflow-x: auto;
+  white-space: pre;
+  margin: 0;
+}
+
+code {
+  background: #2a2a2a;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-family: monospace;
+  font-size: 11px;
+  color: #aaa;
+}
+
+.modal-footer {
+  padding: 10px 16px;
+  border-top: 1px solid #333;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.modal-footer button {
+  padding: 5px 20px;
+  background: #333;
+  color: #ddd;
+  border: 1px solid #555;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.modal-footer button:hover { background: #444; }
 </style>
