@@ -29,7 +29,7 @@
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useProject } from '../composables/useProject.js'
 
-const { project } = useProject()
+const { project, getDisplayFrame } = useProject()
 
 const LED_R = 14
 const OFF_COLOR = 'rgb(10,10,10)'
@@ -82,7 +82,7 @@ function draw() {
   ctx.fillStyle = '#0a0a0a'
   ctx.fillRect(0, 0, canvas.width, canvas.height)
 
-  const frame = project.pattern.frames[currentFrame.value]
+  const frame = getDisplayFrame(currentFrame.value)
   if (!frame) return
 
   const t = computeTransform()
@@ -173,7 +173,8 @@ onUnmounted(() => {
 })
 
 watch(
-  [() => project.pattern.frames, () => project.layout.leds, currentFrame, frameCount, ledCount],
+  [() => project.pattern.frames, () => project.pattern.keyframes, () => project.pattern.edit_mode,
+   () => project.layout.leds, currentFrame, frameCount, ledCount],
   () => { if (!isPlaying.value) draw() },
   { deep: true }
 )

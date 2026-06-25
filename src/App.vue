@@ -46,6 +46,20 @@
           <button class="btn-wifi" @click="showWifiModal = true">WiFi転送</button>
           <input ref="fileInputRef" type="file" accept=".ledproj" style="display:none" @change="onFileLoad" />
         </div>
+        <!-- ガンマ補正 -->
+        <label class="control-item gamma-item">
+          <input type="checkbox"
+            :checked="project.pattern.gamma_correction.enabled"
+            @change="setGamma($event.target.checked)" />
+          ガンマ補正
+        </label>
+        <label v-if="project.pattern.gamma_correction.enabled" class="control-item">
+          γ=
+          <input type="number" min="0.5" max="3.0" step="0.1"
+            :value="project.pattern.gamma_correction.value"
+            @change="setGamma(true, Number($event.target.value))"
+            style="width:46px" />
+        </label>
       </div>
     </header>
 
@@ -148,6 +162,7 @@ const {
   setFps,
   setLoop,
   setProjectName,
+  setGamma,
   loadProject,
   saveProject,
   exportBinary,
@@ -339,6 +354,8 @@ onUnmounted(() => {
 .btn-wifi:hover {
   background: #2a5a8a !important;
 }
+
+.gamma-item { border-left: 1px solid #333; padding-left: 10px; margin-left: 4px; }
 
 .error-banner {
   display: flex;
