@@ -17,6 +17,7 @@ function createNewProject() {
     name: '新規プロジェクト',
     layout: {
       led_count: DEFAULT_LED_COUNT,
+      led_shape: 'circle',  // 'circle' | 'square'
       leds: Array.from({ length: DEFAULT_LED_COUNT }, (_, id) => ({
         id, x: 50 + id * 40, y: 100,
       })),
@@ -37,6 +38,7 @@ function createNewProject() {
 const state = reactive({
   project: createNewProject(),
   errorMessage: null,
+  hasCopied: false,
 })
 
 // ---- Per-cell キーフレーム補間 ----
@@ -232,20 +234,41 @@ function deleteFrame(frameIdx) {
   }
 }
 
-let copiedFrame = null
-function copyFrame(frameIdx) {
-  const f = getDisplayFrame(frameIdx)
-  if (f) copiedFrame = f.leds.map(l => ({ ...l }))
+// コピー・ペースト（矩形ブロック）
+let _copiedBlock = null
+
+function copyRange(frameStart, frameEnd, ledStart, ledEnd) {
+  const rows = []
+  for (let f = frameStart; f <= frameEnd; f++) {
+    const row = []
+    for (let l = ledStart; l <= ledEnd; l++) {
+      const frame = getDisplayFrame(f)
+      const led = frame?.leds[l] ?? { r: 0, g: 0, b: 0 }
+      row.push({ r: led.r, g: led.g, b: led.b })
+    }
+    rows.push(row)
+  }
+  _copiedBlock = {
+    frameCount: frameEnd - frameStart + 1,
+    ledCount: ledEnd - ledStart + 1,
+    rows,
+  }
+  state.hasCopied = true
 }
 
-function pasteFrame(frameIdx) {
-  if (!copiedFrame) return
-  const lc = state.project.layout.led_count
-  if (state.project.pattern.edit_mode === 'keyframes') {
-    copiedFrame.slice(0, lc).forEach((l, i) => setKfCell(i, frameIdx, l.r, l.g, l.b))
-  } else {
-    const f = state.project.pattern.frames[frameIdx]
-    if (f) f.leds = copiedFrame.slice(0, lc).map(l => ({ ...l }))
+function pasteAt(frameStart, ledStart) {
+  if (!_copiedBlock) return
+  const maxFrame = state.project.pattern.frame_count
+  const maxLed = state.project.layout.led_count
+  for (let rf = 0; rf < _copiedBlock.frameCount; rf++) {
+    const f = frameStart + rf
+    if (f >= maxFrame) continue
+    for (let rl = 0; rl < _copiedBlock.ledCount; rl++) {
+      const l = ledStart + rl
+      if (l >= maxLed) continue
+      const c = _copiedBlock.rows[rf][rl]
+      setLedColor(f, l, c.r, c.g, c.b)
+    }
   }
 }
 
@@ -274,6 +297,10 @@ function setLedCount(newCount) {
   })
 }
 
+function setLedShape(shape) {
+  state.project.layout.led_shape = shape
+}
+
 function setLedPosition(id, x, y) {
   const led = state.project.layout.leds.find(l => l.id === id)
   if (!led) return
@@ -287,11 +314,19 @@ function applyLayoutPreset(type, opts = {}) {
   const sp = opts.spacing ?? PRESET_SPACING
   if (type === 'linear') {
     leds.forEach((l, i) => { l.x = 50 + i * sp; l.y = 150 })
-  } else if (type === 'serpentine') {
-    const cols = opts.cols ?? Math.max(2, Math.ceil(Math.sqrt(n)))
+  } else if (type === 'square_frame') {
+    // N個のLEDを正方形の枠（周囲）に等間隔配置
+    const s = opts.size ?? Math.max(80, n * sp / 4)
+    const ox = 60; const oy = 60
     leds.forEach((l, i) => {
-      const row = Math.floor(i / cols); const pos = i % cols
-      l.x = 50 + (row % 2 === 0 ? pos : cols - 1 - pos) * sp; l.y = 50 + row * sp
+      const t4 = (i / n) * 4
+      const side = Math.floor(t4); const frac = t4 - side
+      switch (side % 4) {
+        case 0: l.x = Math.round(ox + frac * s);     l.y = Math.round(oy);         break // 上辺
+        case 1: l.x = Math.round(ox + s);            l.y = Math.round(oy + frac * s); break // 右辺
+        case 2: l.x = Math.round(ox + s - frac * s); l.y = Math.round(oy + s);     break // 下辺
+        case 3: l.x = Math.round(ox);                l.y = Math.round(oy + s - frac * s); break // 左辺
+      }
     })
   } else if (type === 'grid') {
     const cols = opts.cols ?? Math.ceil(Math.sqrt(n))
@@ -367,6 +402,7 @@ function loadProject(jsonStr) {
   try {
     const obj = JSON.parse(jsonStr)
     validateProject(obj)
+    if (!obj.layout.led_shape) obj.layout.led_shape = 'circle'
     if (!obj.pattern.edit_mode) obj.pattern.edit_mode = 'frames'
     if (!obj.pattern.gamma_correction) obj.pattern.gamma_correction = { enabled: false, value: 2.2 }
     // 旧 per-frame keyframes フォーマットを per-cell 形式に移行
@@ -452,12 +488,14 @@ export function useProject() {
     addFrame,
     insertFrame,
     deleteFrame,
-    copyFrame,
-    pasteFrame,
+    hasCopied: computed(() => state.hasCopied),
+    copyRange,
+    pasteAt,
     setLedCount,
     setFps,
     setLoop,
     setProjectName,
+    setLedShape,
     setLedPosition,
     applyLayoutPreset,
     // キーフレーム（per-cell）

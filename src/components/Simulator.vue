@@ -96,18 +96,30 @@ function draw() {
     const cy = layoutLed.y * t.scale + t.oy
 
     const isOff = !led || (led.r === 0 && led.g === 0 && led.b === 0)
+    const shape = project.layout.led_shape ?? 'circle'
 
     if (!isOff) {
       const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, LED_R * 2.5)
       grad.addColorStop(0, `rgba(${led.r},${led.g},${led.b},0.6)`)
       grad.addColorStop(1, 'transparent')
-      ctx.beginPath(); ctx.arc(cx, cy, LED_R * 2.5, 0, Math.PI * 2)
-      ctx.fillStyle = grad; ctx.fill()
+      ctx.fillStyle = grad
+      if (shape === 'square') {
+        ctx.fillRect(cx - LED_R * 2.5, cy - LED_R * 2.5, LED_R * 5, LED_R * 5)
+      } else {
+        ctx.beginPath(); ctx.arc(cx, cy, LED_R * 2.5, 0, Math.PI * 2); ctx.fill()
+      }
     }
 
-    ctx.beginPath(); ctx.arc(cx, cy, LED_R, 0, Math.PI * 2)
     ctx.fillStyle = isOff ? OFF_COLOR : `rgb(${led.r},${led.g},${led.b})`
-    ctx.fill()
+    ctx.strokeStyle = 'rgba(110,110,110,0.55)'
+    ctx.lineWidth = 1
+    if (shape === 'square') {
+      ctx.fillRect(cx - LED_R, cy - LED_R, LED_R * 2, LED_R * 2)
+      ctx.strokeRect(cx - LED_R + 0.5, cy - LED_R + 0.5, LED_R * 2 - 1, LED_R * 2 - 1)
+    } else {
+      ctx.beginPath(); ctx.arc(cx, cy, LED_R, 0, Math.PI * 2)
+      ctx.fill(); ctx.stroke()
+    }
   }
 }
 
@@ -174,7 +186,7 @@ onUnmounted(() => {
 
 watch(
   [() => project.pattern.frames, () => project.pattern.kf_cells, () => project.pattern.edit_mode,
-   () => project.layout.leds, currentFrame, frameCount, ledCount],
+   () => project.layout.leds, () => project.layout.led_shape, currentFrame, frameCount, ledCount],
   () => { if (!isPlaying.value) draw() },
   { deep: true }
 )
