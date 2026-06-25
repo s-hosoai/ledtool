@@ -126,6 +126,48 @@ function setLedCount(newCount) {
   })
 }
 
+function setLedPosition(id, x, y) {
+  const led = state.project.layout.leds.find(l => l.id === id)
+  if (!led) return
+  led.x = Math.round(x)
+  led.y = Math.round(y)
+}
+
+const PRESET_SPACING = 40
+
+function applyLayoutPreset(type, opts = {}) {
+  const leds = state.project.layout.leds
+  const n = leds.length
+  if (n === 0) return
+  const sp = opts.spacing ?? PRESET_SPACING
+
+  if (type === 'linear') {
+    leds.forEach((l, i) => { l.x = 50 + i * sp; l.y = 150 })
+  } else if (type === 'serpentine') {
+    const cols = opts.cols ?? Math.max(2, Math.ceil(Math.sqrt(n)))
+    leds.forEach((l, i) => {
+      const row = Math.floor(i / cols)
+      const pos = i % cols
+      l.x = 50 + (row % 2 === 0 ? pos : cols - 1 - pos) * sp
+      l.y = 50 + row * sp
+    })
+  } else if (type === 'grid') {
+    const cols = opts.cols ?? Math.ceil(Math.sqrt(n))
+    leds.forEach((l, i) => {
+      l.x = 50 + (i % cols) * sp
+      l.y = 50 + Math.floor(i / cols) * sp
+    })
+  } else if (type === 'circle') {
+    const r = Math.max(60, n * sp / (2 * Math.PI))
+    const cx = r + 60; const cy = r + 60
+    leds.forEach((l, i) => {
+      const a = (2 * Math.PI * i / n) - Math.PI / 2
+      l.x = Math.round(cx + r * Math.cos(a))
+      l.y = Math.round(cy + r * Math.sin(a))
+    })
+  }
+}
+
 function setFps(fps) {
   state.project.pattern.fps = Math.max(1, Math.min(60, fps))
 }
@@ -243,6 +285,8 @@ export function useProject() {
     setProjectName,
     loadProject,
     saveProject,
+    setLedPosition,
+    applyLayoutPreset,
     exportBinary,
     newProject,
     clearError,

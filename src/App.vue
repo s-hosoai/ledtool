@@ -64,10 +64,14 @@
       <!-- ドラッグハンドル -->
       <div class="divider" @mousedown="startDividerDrag" title="ドラッグで幅を変更" />
 
-      <!-- 右：シミュレーター -->
+      <!-- 右：シミュレーター / レイアウト タブ -->
       <div class="pane pane-right">
-        <div class="pane-title">シミュレーター</div>
-        <Simulator class="pane-content" />
+        <div class="pane-tabs">
+          <button :class="{ active: rightTab === 'simulator' }" @click="rightTab = 'simulator'">シミュレーター</button>
+          <button :class="{ active: rightTab === 'layout' }" @click="rightTab = 'layout'">レイアウト</button>
+        </div>
+        <Simulator v-show="rightTab === 'simulator'" class="pane-content" />
+        <LayoutEditor v-show="rightTab === 'layout'" class="pane-content" />
       </div>
     </div>
 
@@ -125,6 +129,7 @@ import { ref, computed, onUnmounted } from 'vue'
 import { useProject } from './composables/useProject.js'
 import TimelineEditor from './components/TimelineEditor.vue'
 import Simulator from './components/Simulator.vue'
+import LayoutEditor from './components/LayoutEditor.vue'
 
 const {
   project,
@@ -142,6 +147,7 @@ const {
 } = useProject()
 
 const fileInputRef = ref(null)
+const rightTab = ref('simulator')
 const showExportModal = ref(false)
 const exportedFileName = ref('')
 const flashAddrHex = computed(() => `0x${LED_DATA_FLASH_ADDR.toString(16)}`)
@@ -352,6 +358,27 @@ onUnmounted(() => {
   flex-shrink: 0;
   letter-spacing: 0.05em;
 }
+
+.pane-tabs {
+  display: flex;
+  background: #1a1a1a;
+  border-bottom: 1px solid #333;
+  flex-shrink: 0;
+}
+
+.pane-tabs button {
+  padding: 4px 14px;
+  background: none;
+  color: #666;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  font-size: 12px;
+  transition: color 0.1s;
+}
+
+.pane-tabs button:hover { color: #aaa; }
+.pane-tabs button.active { color: #ddd; border-bottom-color: #4a9eff; }
 
 .pane-content {
   flex: 1;
