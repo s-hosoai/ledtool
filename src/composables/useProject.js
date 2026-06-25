@@ -5,14 +5,10 @@ const DEFAULT_FRAME_COUNT = 10
 const DEFAULT_FPS = 10
 
 function createFrames(ledCount, frameCount) {
-  return Array.from({ length: frameCount }, (_, frameIdx) => ({
-    frame: frameIdx,
+  return Array.from({ length: frameCount }, (_, fi) => ({
+    frame: fi,
     leds: Array.from({ length: ledCount }, (_, id) => ({ id, r: 0, g: 0, b: 0 })),
   }))
-}
-
-function emptyFrameLeds(ledCount) {
-  return Array.from({ length: ledCount }, (_, id) => ({ id, r: 0, g: 0, b: 0 }))
 }
 
 function createNewProject() {
@@ -29,8 +25,9 @@ function createNewProject() {
       fps: DEFAULT_FPS,
       loop: true,
       frame_count: DEFAULT_FRAME_COUNT,
-      edit_mode: 'frames',        // 'frames' | 'keyframes'
-      keyframes: [],              // キーフレームモード用
+      edit_mode: 'frames',       // 'frames' | 'keyframes'
+      // Per-cell keyframes: { led, frame, r, g, b, interp:'linear'|'step' }
+      kf_cells: [],
       gamma_correction: { enabled: false, value: 2.2 },
       frames: createFrames(DEFAULT_LED_COUNT, DEFAULT_FRAME_COUNT),
     },
@@ -42,46 +39,41 @@ const state = reactive({
   errorMessage: null,
 })
 
-// ---- キーフレーム補間 ----
+// ---- Per-cell キーフレーム補間 ----
+
+function _interpolateLed(ledId, frameIdx, sortedCells) {
+  if (sortedCells.length === 0) return { id: ledId, r: 0, g: 0, b: 0 }
+  let prev = sortedCells[0]; let next = null
+  for (const c of sortedCells) {
+    if (c.frame <= frameIdx) prev = c
+    if (c.frame > frameIdx && !next) next = c
+  }
+  if (prev.frame === frameIdx) return { id: ledId, r: prev.r, g: prev.g, b: prev.b }
+  if (!next) return { id: ledId, r: prev.r, g: prev.g, b: prev.b }
+  if (prev.interp === 'step') return { id: ledId, r: prev.r, g: prev.g, b: prev.b }
+  const t = (frameIdx - prev.frame) / (next.frame - prev.frame)
+  return {
+    id: ledId,
+    r: Math.round(prev.r + t * (next.r - prev.r)),
+    g: Math.round(prev.g + t * (next.g - prev.g)),
+    b: Math.round(prev.b + t * (next.b - prev.b)),
+  }
+}
 
 function computeInterpolatedFrame(frameIdx) {
-  const kfs = state.project.pattern.keyframes
-  const ledCount = state.project.layout.led_count
-  if (kfs.length === 0) return { frame: frameIdx, leds: emptyFrameLeds(ledCount) }
-
-  const sorted = [...kfs].sort((a, b) => a.frame - b.frame)
-
-  // 前後のキーフレームを探す
-  let prevKF = sorted[0]
-  let nextKF = null
-  for (const kf of sorted) {
-    if (kf.frame <= frameIdx) prevKF = kf
-    if (kf.frame > frameIdx && !nextKF) nextKF = kf
+  const lc = state.project.layout.led_count
+  const byLed = new Map()
+  for (const c of state.project.pattern.kf_cells) {
+    if (!byLed.has(c.led)) byLed.set(c.led, [])
+    byLed.get(c.led).push(c)
   }
-
-  // 完全一致
-  if (prevKF.frame === frameIdx) return prevKF
-
-  // 最後のキーフレームより後ろ：最後の値を保持
-  if (!nextKF) return { frame: frameIdx, leds: prevKF.leds.map(l => ({ ...l })) }
-
-  // ステップ補間：前のキーフレームの値を保持
-  if (prevKF.interpolation === 'step') {
-    return { frame: frameIdx, leds: prevKF.leds.map(l => ({ ...l })) }
+  for (const [, arr] of byLed) arr.sort((a, b) => a.frame - b.frame)
+  return {
+    frame: frameIdx,
+    leds: Array.from({ length: lc }, (_, i) =>
+      _interpolateLed(i, frameIdx, byLed.get(i) ?? [])
+    ),
   }
-
-  // 線形補間
-  const t = (frameIdx - prevKF.frame) / (nextKF.frame - prevKF.frame)
-  const leds = prevKF.leds.map((led, i) => {
-    const nled = nextKF.leds[i] ?? { r: 0, g: 0, b: 0 }
-    return {
-      id: led.id,
-      r: Math.round(led.r + t * (nled.r - led.r)),
-      g: Math.round(led.g + t * (nled.g - led.g)),
-      b: Math.round(led.b + t * (nled.b - led.b)),
-    }
-  })
-  return { frame: frameIdx, leds }
 }
 
 function getDisplayFrame(frameIdx) {
@@ -91,51 +83,70 @@ function getDisplayFrame(frameIdx) {
   return state.project.pattern.frames[frameIdx]
 }
 
-function isKeyframe(frameIdx) {
-  return state.project.pattern.keyframes.some(k => k.frame === frameIdx)
+// ---- Per-cell KF 操作 ----
+
+function isKfCell(led, frame) {
+  return state.project.pattern.kf_cells.some(c => c.led === led && c.frame === frame)
 }
 
-function addKeyframe(frameIdx) {
-  if (isKeyframe(frameIdx)) return
-  const computed = computeInterpolatedFrame(frameIdx)
-  state.project.pattern.keyframes.push({
-    frame: frameIdx,
-    leds: computed.leds.map(l => ({ ...l })),
-    interpolation: 'linear',
+function setKfCell(led, frame, r, g, b, interp) {
+  const ex = state.project.pattern.kf_cells.find(c => c.led === led && c.frame === frame)
+  if (ex) {
+    ex.r = r; ex.g = g; ex.b = b
+    if (interp !== undefined) ex.interp = interp
+  } else {
+    state.project.pattern.kf_cells.push({ led, frame, r, g, b, interp: interp ?? 'linear' })
+  }
+}
+
+function removeKfCells(ledStart, ledEnd, frameStart, frameEnd) {
+  state.project.pattern.kf_cells = state.project.pattern.kf_cells.filter(
+    c => !(c.led >= ledStart && c.led <= ledEnd && c.frame >= frameStart && c.frame <= frameEnd)
+  )
+}
+
+function setKfCellInterpRange(ledStart, ledEnd, frameStart, frameEnd, interp) {
+  state.project.pattern.kf_cells.forEach(c => {
+    if (c.led >= ledStart && c.led <= ledEnd && c.frame >= frameStart && c.frame <= frameEnd) {
+      c.interp = interp
+    }
   })
-  state.project.pattern.keyframes.sort((a, b) => a.frame - b.frame)
 }
 
-function removeKeyframe(frameIdx) {
-  const kfs = state.project.pattern.keyframes
-  if (kfs.length <= 1) return
-  const idx = kfs.findIndex(k => k.frame === frameIdx)
-  if (idx !== -1) kfs.splice(idx, 1)
+function getKfCellInterp(led, frame) {
+  const c = state.project.pattern.kf_cells.find(c => c.led === led && c.frame === frame)
+  return c?.interp ?? 'linear'
 }
 
-function setKeyframeInterpolation(frameIdx, type) {
-  const kf = state.project.pattern.keyframes.find(k => k.frame === frameIdx)
-  if (kf) kf.interpolation = type
-}
+// ---- 編集モード切替 ----
 
 function setEditMode(mode) {
-  const current = state.project.pattern.edit_mode
-  if (current === mode) return
+  const cur = state.project.pattern.edit_mode
+  if (cur === mode) return
 
   if (mode === 'keyframes') {
-    // 全フレームをキーフレームとして登録
-    state.project.pattern.keyframes = state.project.pattern.frames.map(f => ({
-      frame: f.frame,
-      leds: f.leds.map(l => ({ ...l })),
-      interpolation: 'linear',
-    }))
+    const lc = state.project.layout.led_count
+    const fc = state.project.pattern.frame_count
+    const cells = []
+    // フレーム0 と最終フレームの色だけをKFとして設定（中間は補間）
+    const lastF = fc - 1
+    for (let led = 0; led < lc; led++) {
+      const f0 = state.project.pattern.frames[0]?.leds[led] ?? { r: 0, g: 0, b: 0 }
+      cells.push({ led, frame: 0, r: f0.r, g: f0.g, b: f0.b, interp: 'linear' })
+      if (lastF > 0) {
+        const fl = state.project.pattern.frames[lastF]?.leds[led] ?? { r: 0, g: 0, b: 0 }
+        cells.push({ led, frame: lastF, r: fl.r, g: fl.g, b: fl.b, interp: 'linear' })
+      }
+    }
+    state.project.pattern.kf_cells = cells
   } else {
-    // キーフレームから全フレームを再計算
+    // キーフレームから全フレームを再計算して frames[] に書き戻す
     const fc = state.project.pattern.frame_count
     state.project.pattern.frames = Array.from({ length: fc }, (_, i) => {
       const d = computeInterpolatedFrame(i)
       return { frame: i, leds: d.leds.map(l => ({ ...l })) }
     })
+    state.project.pattern.kf_cells = []
   }
   state.project.pattern.edit_mode = mode
 }
@@ -144,11 +155,7 @@ function setEditMode(mode) {
 
 function setLedColor(frameIdx, ledId, r, g, b) {
   if (state.project.pattern.edit_mode === 'keyframes') {
-    if (!isKeyframe(frameIdx)) addKeyframe(frameIdx)
-    const kf = state.project.pattern.keyframes.find(k => k.frame === frameIdx)
-    const led = kf?.leds[ledId]
-    if (!led) return
-    led.r = r; led.g = g; led.b = b
+    setKfCell(ledId, frameIdx, r, g, b)
   } else {
     const led = state.project.pattern.frames[frameIdx]?.leds[ledId]
     if (!led) return
@@ -158,16 +165,10 @@ function setLedColor(frameIdx, ledId, r, g, b) {
 
 function fillRange(frameStart, frameEnd, ledStart, ledEnd, r, g, b) {
   if (state.project.pattern.edit_mode === 'keyframes') {
-    // 範囲の始端・終端にキーフレームを作成し、選択LEDに色を設定
-    const targets = frameStart === frameEnd
-      ? [frameStart]
-      : [frameStart, frameEnd]
-    for (const f of targets) {
-      if (!isKeyframe(f)) addKeyframe(f)
-      const kf = state.project.pattern.keyframes.find(k => k.frame === f)
-      if (!kf) continue
+    // 選択範囲の全セルをKFとして設定
+    for (let f = frameStart; f <= frameEnd; f++) {
       for (let l = ledStart; l <= ledEnd; l++) {
-        if (kf.leds[l]) { kf.leds[l].r = r; kf.leds[l].g = g; kf.leds[l].b = b }
+        setKfCell(l, f, r, g, b)
       }
     }
   } else {
@@ -183,25 +184,20 @@ function fillRange(frameStart, frameEnd, ledStart, ledEnd, r, g, b) {
 
 function insertFrame(afterIdx, sourceFrameIdx) {
   if (state.project.pattern.edit_mode === 'keyframes') {
-    // キーフレームインデックスを afterIdx+1 以降はすべて +1
-    state.project.pattern.keyframes.forEach(kf => {
-      if (kf.frame > afterIdx) kf.frame += 1
-    })
-    // sourceFrameIdx のキーフレームをコピーして挿入
+    // afterIdx より後ろのKFインデックスを +1
+    state.project.pattern.kf_cells.forEach(c => { if (c.frame > afterIdx) c.frame += 1 })
+    // sourceFrameIdx の計算済みフレームを KF として挿入
     const src = computeInterpolatedFrame(sourceFrameIdx)
-    state.project.pattern.keyframes.push({
-      frame: afterIdx + 1,
-      leds: src.leds.map(l => ({ ...l })),
-      interpolation: 'linear',
+    src.leds.forEach(led => {
+      state.project.pattern.kf_cells.push({
+        led: led.id, frame: afterIdx + 1,
+        r: led.r, g: led.g, b: led.b, interp: 'linear',
+      })
     })
-    state.project.pattern.keyframes.sort((a, b) => a.frame - b.frame)
     state.project.pattern.frame_count += 1
   } else {
     const src = state.project.pattern.frames[sourceFrameIdx]
-    const newFrame = {
-      frame: afterIdx + 1,
-      leds: src.leds.map(l => ({ ...l })),
-    }
+    const newFrame = { frame: afterIdx + 1, leds: src.leds.map(l => ({ ...l })) }
     state.project.pattern.frames.splice(afterIdx + 1, 0, newFrame)
     state.project.pattern.frames.forEach((f, i) => { f.frame = i })
     state.project.pattern.frame_count = state.project.pattern.frames.length
@@ -209,14 +205,14 @@ function insertFrame(afterIdx, sourceFrameIdx) {
 }
 
 function addFrame() {
-  const ledCount = state.project.layout.led_count
+  const lc = state.project.layout.led_count
   if (state.project.pattern.edit_mode === 'keyframes') {
     state.project.pattern.frame_count += 1
   } else {
-    const newIdx = state.project.pattern.frames.length
+    const ni = state.project.pattern.frames.length
     state.project.pattern.frames.push({
-      frame: newIdx,
-      leds: Array.from({ length: ledCount }, (_, id) => ({ id, r: 0, g: 0, b: 0 })),
+      frame: ni,
+      leds: Array.from({ length: lc }, (_, id) => ({ id, r: 0, g: 0, b: 0 })),
     })
     state.project.pattern.frame_count = state.project.pattern.frames.length
   }
@@ -225,13 +221,8 @@ function addFrame() {
 function deleteFrame(frameIdx) {
   if (state.project.pattern.edit_mode === 'keyframes') {
     if (state.project.pattern.frame_count <= 1) return
-    // 対象がキーフレームなら削除
-    const ki = state.project.pattern.keyframes.findIndex(k => k.frame === frameIdx)
-    if (ki !== -1) state.project.pattern.keyframes.splice(ki, 1)
-    // frameIdx より後ろのキーフレームインデックスを -1
-    state.project.pattern.keyframes.forEach(kf => {
-      if (kf.frame > frameIdx) kf.frame -= 1
-    })
+    removeKfCells(0, state.project.layout.led_count - 1, frameIdx, frameIdx)
+    state.project.pattern.kf_cells.forEach(c => { if (c.frame > frameIdx) c.frame -= 1 })
     state.project.pattern.frame_count -= 1
   } else {
     if (state.project.pattern.frames.length <= 1) return
@@ -243,20 +234,18 @@ function deleteFrame(frameIdx) {
 
 let copiedFrame = null
 function copyFrame(frameIdx) {
-  const frame = getDisplayFrame(frameIdx)
-  if (!frame) return
-  copiedFrame = frame.leds.map(l => ({ ...l }))
+  const f = getDisplayFrame(frameIdx)
+  if (f) copiedFrame = f.leds.map(l => ({ ...l }))
 }
 
 function pasteFrame(frameIdx) {
   if (!copiedFrame) return
+  const lc = state.project.layout.led_count
   if (state.project.pattern.edit_mode === 'keyframes') {
-    if (!isKeyframe(frameIdx)) addKeyframe(frameIdx)
-    const kf = state.project.pattern.keyframes.find(k => k.frame === frameIdx)
-    if (kf) kf.leds = copiedFrame.map(l => ({ ...l }))
+    copiedFrame.slice(0, lc).forEach((l, i) => setKfCell(i, frameIdx, l.r, l.g, l.b))
   } else {
-    const frame = state.project.pattern.frames[frameIdx]
-    if (frame) frame.leds = copiedFrame.map(l => ({ ...l }))
+    const f = state.project.pattern.frames[frameIdx]
+    if (f) f.leds = copiedFrame.slice(0, lc).map(l => ({ ...l }))
   }
 }
 
@@ -273,18 +262,16 @@ function setLedCount(newCount) {
     }
   } else {
     state.project.layout.leds = state.project.layout.leds.slice(0, newCount)
+    state.project.pattern.kf_cells = state.project.pattern.kf_cells.filter(c => c.led < newCount)
   }
 
-  const resize = (leds) => {
+  state.project.pattern.frames.forEach(f => {
     if (newCount > oldCount) {
-      for (let id = oldCount; id < newCount; id++) leds.push({ id, r: 0, g: 0, b: 0 })
+      for (let id = oldCount; id < newCount; id++) f.leds.push({ id, r: 0, g: 0, b: 0 })
     } else {
-      leds.splice(newCount)
+      f.leds = f.leds.slice(0, newCount)
     }
-  }
-
-  state.project.pattern.frames.forEach(f => resize(f.leds))
-  state.project.pattern.keyframes.forEach(kf => resize(kf.leds))
+  })
 }
 
 function setLedPosition(id, x, y) {
@@ -294,30 +281,23 @@ function setLedPosition(id, x, y) {
 }
 
 const PRESET_SPACING = 40
-
 function applyLayoutPreset(type, opts = {}) {
   const leds = state.project.layout.leds
-  const n = leds.length
-  if (n === 0) return
+  const n = leds.length; if (n === 0) return
   const sp = opts.spacing ?? PRESET_SPACING
-
   if (type === 'linear') {
     leds.forEach((l, i) => { l.x = 50 + i * sp; l.y = 150 })
   } else if (type === 'serpentine') {
     const cols = opts.cols ?? Math.max(2, Math.ceil(Math.sqrt(n)))
     leds.forEach((l, i) => {
       const row = Math.floor(i / cols); const pos = i % cols
-      l.x = 50 + (row % 2 === 0 ? pos : cols - 1 - pos) * sp
-      l.y = 50 + row * sp
+      l.x = 50 + (row % 2 === 0 ? pos : cols - 1 - pos) * sp; l.y = 50 + row * sp
     })
   } else if (type === 'grid') {
     const cols = opts.cols ?? Math.ceil(Math.sqrt(n))
-    leds.forEach((l, i) => {
-      l.x = 50 + (i % cols) * sp; l.y = 50 + Math.floor(i / cols) * sp
-    })
+    leds.forEach((l, i) => { l.x = 50 + (i % cols) * sp; l.y = 50 + Math.floor(i / cols) * sp })
   } else if (type === 'circle') {
-    const r = Math.max(60, n * sp / (2 * Math.PI))
-    const cx = r + 60; const cy = r + 60
+    const r = Math.max(60, n * sp / (2 * Math.PI)); const cx = r + 60; const cy = r + 60
     leds.forEach((l, i) => {
       const a = (2 * Math.PI * i / n) - Math.PI / 2
       l.x = Math.round(cx + r * Math.cos(a)); l.y = Math.round(cy + r * Math.sin(a))
@@ -325,10 +305,7 @@ function applyLayoutPreset(type, opts = {}) {
   }
 }
 
-function setFps(fps) {
-  state.project.pattern.fps = Math.max(1, Math.min(60, fps))
-}
-
+function setFps(fps) { state.project.pattern.fps = Math.max(1, Math.min(60, fps)) }
 function setLoop(loop) { state.project.pattern.loop = loop }
 function setProjectName(name) { state.project.name = name }
 
@@ -339,43 +316,38 @@ function setGamma(enabled, value) {
   if (value !== undefined) state.project.pattern.gamma_correction.value = value
 }
 
-function applyGamma(v, gamma) {
-  return Math.round(Math.pow(Math.max(0, Math.min(255, v)) / 255, gamma) * 255)
+function _applyGamma(v, g) {
+  return Math.round(Math.pow(Math.max(0, Math.min(255, v)) / 255, g) * 255)
 }
 
 // ---- パターン変換 ----
 
 function reverseFrames() {
   if (state.project.pattern.edit_mode === 'keyframes') {
-    const maxF = state.project.pattern.frame_count - 1
-    state.project.pattern.keyframes.forEach(kf => { kf.frame = maxF - kf.frame })
-    state.project.pattern.keyframes.sort((a, b) => a.frame - b.frame)
+    const mx = state.project.pattern.frame_count - 1
+    state.project.pattern.kf_cells.forEach(c => { c.frame = mx - c.frame })
   } else {
-    const frames = state.project.pattern.frames
-    frames.reverse()
-    frames.forEach((f, i) => { f.frame = i })
+    state.project.pattern.frames.reverse()
+    state.project.pattern.frames.forEach((f, i) => { f.frame = i })
   }
 }
 
 function mirrorLeds() {
-  const op = (leds) => {
-    const rev = [...leds].reverse()
-    rev.forEach((l, i) => { l.id = i })
-    return rev
-  }
+  const ml = state.project.layout.led_count - 1
   if (state.project.pattern.edit_mode === 'keyframes') {
-    state.project.pattern.keyframes.forEach(kf => { kf.leds = op(kf.leds) })
+    state.project.pattern.kf_cells.forEach(c => { c.led = ml - c.led })
   } else {
+    const op = (leds) => { const r = [...leds].reverse(); r.forEach((l, i) => { l.id = i }); return r }
     state.project.pattern.frames.forEach(f => { f.leds = op(f.leds) })
   }
 }
 
 function invertColors() {
-  const op = (leds) => leds.forEach(l => { l.r = 255 - l.r; l.g = 255 - l.g; l.b = 255 - l.b })
+  const op = (c) => { c.r = 255 - c.r; c.g = 255 - c.g; c.b = 255 - c.b }
   if (state.project.pattern.edit_mode === 'keyframes') {
-    state.project.pattern.keyframes.forEach(kf => op(kf.leds))
+    state.project.pattern.kf_cells.forEach(op)
   } else {
-    state.project.pattern.frames.forEach(f => op(f.leds))
+    state.project.pattern.frames.forEach(f => f.leds.forEach(op))
   }
 }
 
@@ -395,10 +367,25 @@ function loadProject(jsonStr) {
   try {
     const obj = JSON.parse(jsonStr)
     validateProject(obj)
-    // 旧バージョンのフィールドを補完
     if (!obj.pattern.edit_mode) obj.pattern.edit_mode = 'frames'
-    if (!obj.pattern.keyframes) obj.pattern.keyframes = []
     if (!obj.pattern.gamma_correction) obj.pattern.gamma_correction = { enabled: false, value: 2.2 }
+    // 旧 per-frame keyframes フォーマットを per-cell 形式に移行
+    if (!obj.pattern.kf_cells) {
+      if (Array.isArray(obj.pattern.keyframes) && obj.pattern.keyframes.length > 0) {
+        obj.pattern.kf_cells = []
+        for (const kf of obj.pattern.keyframes) {
+          kf.leds.forEach((led, i) => {
+            obj.pattern.kf_cells.push({
+              led: i, frame: kf.frame,
+              r: led.r, g: led.g, b: led.b,
+              interp: kf.interpolation ?? 'linear',
+            })
+          })
+        }
+      } else {
+        obj.pattern.kf_cells = []
+      }
+    }
     Object.assign(state.project, obj)
     state.errorMessage = null
   } catch (e) {
@@ -422,18 +409,13 @@ function exportBinary() {
   const ledCount = state.project.layout.led_count
   const frameCount = frame_count
   const gamma = gamma_correction?.enabled ? (gamma_correction?.value ?? 2.2) : null
-  const HEADER_SIZE = 16
-  const frameSize = ledCount * 3
-  const totalSize = HEADER_SIZE + frameSize * frameCount
-
-  const buffer = new ArrayBuffer(totalSize)
+  const HEADER_SIZE = 16; const frameSize = ledCount * 3
+  const buffer = new ArrayBuffer(HEADER_SIZE + frameSize * frameCount)
   const view = new DataView(buffer); const bytes = new Uint8Array(buffer)
 
-  view.setUint16(0x00, 0x4C45, true)
-  view.setUint8(0x02, 0x01)
+  view.setUint16(0x00, 0x4C45, true); view.setUint8(0x02, 0x01)
   view.setUint8(0x03, loop ? 0x01 : 0x00)
-  view.setUint16(0x04, ledCount, true)
-  view.setUint16(0x06, frameCount, true)
+  view.setUint16(0x04, ledCount, true); view.setUint16(0x06, frameCount, true)
   view.setUint8(0x08, fps)
 
   for (let f = 0; f < frameCount; f++) {
@@ -441,9 +423,9 @@ function exportBinary() {
     for (let l = 0; l < ledCount; l++) {
       const led = frame?.leds[l] ?? { r: 0, g: 0, b: 0 }
       let r = led.r, g = led.g, b = led.b
-      if (gamma) { r = applyGamma(r, gamma); g = applyGamma(g, gamma); b = applyGamma(b, gamma) }
-      const offset = HEADER_SIZE + f * frameSize + l * 3
-      bytes[offset + 0] = g; bytes[offset + 1] = r; bytes[offset + 2] = b
+      if (gamma) { r = _applyGamma(r, gamma); g = _applyGamma(g, gamma); b = _applyGamma(b, gamma) }
+      const off = HEADER_SIZE + f * frameSize + l * 3
+      bytes[off] = g; bytes[off + 1] = r; bytes[off + 2] = b
     }
   }
 
@@ -465,29 +447,26 @@ export function useProject() {
   return {
     project: readonly(state.project),
     errorMessage: computed(() => state.errorMessage),
-    // 色設定
     setLedColor,
     fillRange,
-    // フレーム操作
     addFrame,
     insertFrame,
     deleteFrame,
     copyFrame,
     pasteFrame,
-    // LED/FPS/設定
     setLedCount,
     setFps,
     setLoop,
     setProjectName,
-    // レイアウト
     setLedPosition,
     applyLayoutPreset,
-    // キーフレーム
+    // キーフレーム（per-cell）
     setEditMode,
-    addKeyframe,
-    removeKeyframe,
-    isKeyframe,
-    setKeyframeInterpolation,
+    isKfCell,
+    setKfCell,
+    removeKfCells,
+    setKfCellInterpRange,
+    getKfCellInterp,
     getDisplayFrame,
     computeInterpolatedFrame,
     // ガンマ
@@ -496,7 +475,6 @@ export function useProject() {
     reverseFrames,
     mirrorLeds,
     invertColors,
-    // 保存・エクスポート
     loadProject,
     saveProject,
     exportBinary,

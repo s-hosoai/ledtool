@@ -173,7 +173,7 @@ onUnmounted(() => {
 })
 
 watch(
-  [() => project.pattern.frames, () => project.pattern.keyframes, () => project.pattern.edit_mode,
+  [() => project.pattern.frames, () => project.pattern.kf_cells, () => project.pattern.edit_mode,
    () => project.layout.leds, currentFrame, frameCount, ledCount],
   () => { if (!isPlaying.value) draw() },
   { deep: true }

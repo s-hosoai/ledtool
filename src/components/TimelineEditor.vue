@@ -14,12 +14,13 @@
         @click="toggleEditMode"
         title="キーフレーム補間モードに切り替え"
       >キーフレーム</button>
-      <!-- キーフレームモード時の追加操作 -->
+      <!-- キーフレームモード時の個別セル操作 -->
       <template v-if="editMode === 'keyframes'">
-        <button @click="onRemoveKeyframe"
-          :disabled="selectedFrame === null || !isKeyframe(selectedFrame)"
-          title="選択フレームのキーフレームを削除">KF削除</button>
-        <select v-if="selectedFrame !== null && isKeyframe(selectedFrame)"
+        <button @click="onMarkAsKf" :disabled="selection === null"
+          title="選択セルをキーフレームとして設定（現在の補間色で確定）">KFにする</button>
+        <button @click="onRemoveKfCells" :disabled="!selectionHasKf"
+          title="選択セルのキーフレームを解除（補間に戻す）">KF解除</button>
+        <select v-if="showInterpSelect"
           :value="selectedKfInterp" @change="onSetInterp($event.target.value)"
           title="補間タイプ" class="interp-select">
           <option value="linear">線形</option>
@@ -31,10 +32,13 @@
     <!-- ツールバー行2：変換 -->
     <div class="timeline-toolbar toolbar-row2">
       <span class="toolbar-label">変換：</span>
-      <button @click="reverseFrames" title="フレームの順序を反転">フレーム反転</button>
-      <button @click="mirrorLeds" title="LED番号の順序を反転">LED反転</button>
-      <button @click="invertColors" title="全セルの色を反転">色反転</button>
-      <span class="toolbar-hint">クリック：色設定　ドラッグ：範囲選択</span>
+      <button @click="onReverseFrames" title="フレームの順序を反転">フレーム反転</button>
+      <button @click="onMirrorLeds" title="LED番号の順序を反転">LED反転</button>
+      <button @click="onInvertColors" title="全セルの色を反転">色反転</button>
+      <span class="toolbar-hint">
+        <span v-if="editMode === 'keyframes'">◆=KF　暗いセル=補間　色変更→KF自動作成</span>
+        <span v-else>クリック：色設定　ドラッグ：範囲選択</span>
+      </span>
     </div>
 
     <!-- キャンバス（スクロール可） -->
@@ -70,10 +74,11 @@ import ColorPicker from './ColorPicker.vue'
 const {
   project,
   setEditMode,
-  addKeyframe,
-  removeKeyframe,
-  isKeyframe,
-  setKeyframeInterpolation,
+  isKfCell,
+  setKfCell,
+  removeKfCells,
+  setKfCellInterpRange,
+  getKfCellInterp,
   getDisplayFrame,
   fillRange,
   addFrame,
@@ -105,17 +110,34 @@ const frameCount = computed(() => project.pattern.frame_count)
 const ledCount = computed(() => project.layout.led_count)
 const editMode = computed(() => project.pattern.edit_mode)
 
+// 選択範囲内にKFセルが存在するか
+const selectionHasKf = computed(() => {
+  if (!selection.value || editMode.value !== 'keyframes') return false
+  const { frameStart, frameEnd, ledStart, ledEnd } = selection.value
+  return project.pattern.kf_cells.some(
+    c => c.led >= ledStart && c.led <= ledEnd && c.frame >= frameStart && c.frame <= frameEnd
+  )
+})
+
+// 選択範囲の左上セルがKFなら補間タイプ選択を表示
+const showInterpSelect = computed(() =>
+  editMode.value === 'keyframes' && selection.value !== null &&
+  isKfCell(selection.value.ledStart, selection.value.frameStart)
+)
+
 const selectedKfInterp = computed(() => {
-  if (selectedFrame.value === null) return 'linear'
-  const kf = project.pattern.keyframes.find(k => k.frame === selectedFrame.value)
-  return kf?.interpolation ?? 'linear'
+  if (!selection.value || editMode.value !== 'keyframes') return 'linear'
+  return getKfCellInterp(selection.value.ledStart, selection.value.frameStart)
 })
 
 const selectionLabel = computed(() => {
   const sel = selection.value
   if (!sel) return 'セルをクリック / ドラッグで色を設定'
   if (sel.frameStart === sel.frameEnd && sel.ledStart === sel.ledEnd) {
-    return `フレーム ${sel.frameStart}  /  LED ${sel.ledStart}`
+    const kfInfo = (editMode.value === 'keyframes')
+      ? (isKfCell(sel.ledStart, sel.frameStart) ? ' ◆KF' : ' 補間')
+      : ''
+    return `フレーム ${sel.frameStart}  /  LED ${sel.ledStart}${kfInfo}`
   }
   return `フレーム ${sel.frameStart}〜${sel.frameEnd}  /  LED ${sel.ledStart}〜${sel.ledEnd}`
 })
@@ -138,34 +160,40 @@ function draw() {
   ctx.clearRect(0, 0, canvas.width, canvas.height)
 
   const isKfMode = editMode.value === 'keyframes'
-  const kfSet = isKfMode ? new Set(project.pattern.keyframes.map(k => k.frame)) : null
+  // per-cell KF判定用セット
+  let cellKfSet = null; let framesWithKf = null
+  if (isKfMode) {
+    cellKfSet = new Set(project.pattern.kf_cells.map(c => `${c.led}:${c.frame}`))
+    framesWithKf = new Set(project.pattern.kf_cells.map(c => c.frame))
+  }
 
-  // フレーム番号ヘッダ
+  // フレーム番号ヘッダ背景
   ctx.fillStyle = '#2a2a2a'
   ctx.fillRect(LABEL_W, 0, canvas.width - LABEL_W, HEADER_H)
   ctx.font = '10px monospace'
   ctx.textAlign = 'center'
   ctx.textBaseline = 'middle'
   for (let f = 0; f < frameCount.value; f++) {
-    const x = LABEL_W + f * CELL_W + CELL_W / 2
-    // キーフレーム列：橙色の列背景
-    if (isKfMode && kfSet.has(f)) {
+    const x = LABEL_W + f * CELL_W
+    const cx = x + CELL_W / 2
+    // KFが存在する列：橙色ヘッダ
+    if (isKfMode && framesWithKf.has(f)) {
       ctx.fillStyle = '#3a2800'
-      ctx.fillRect(LABEL_W + f * CELL_W, 0, CELL_W, HEADER_H)
+      ctx.fillRect(x, 0, CELL_W, HEADER_H)
     }
-    ctx.fillStyle = (isKfMode && kfSet.has(f)) ? '#f0a020' : '#aaa'
-    ctx.fillText(String(f), x, HEADER_H / 2)
+    ctx.fillStyle = (isKfMode && framesWithKf.has(f)) ? '#f0a020' : '#aaa'
+    ctx.fillText(String(f), cx, HEADER_H / 2)
   }
 
-  // キーフレームダイヤマーカー
+  // KFが存在する列ヘッダにダイヤマーカー（列全体にKFがある目印）
   if (isKfMode) {
-    ctx.fillStyle = '#f0a020'
-    for (const f of kfSet) {
+    ctx.fillStyle = '#c07010'
+    for (const f of framesWithKf) {
       const cx = LABEL_W + f * CELL_W + CELL_W / 2
-      const cy = HEADER_H - 4
+      const cy = HEADER_H - 3
       ctx.beginPath()
-      ctx.moveTo(cx, cy - 5); ctx.lineTo(cx + 4, cy)
-      ctx.lineTo(cx, cy + 4); ctx.lineTo(cx - 4, cy)
+      ctx.moveTo(cx, cy - 3); ctx.lineTo(cx + 3, cy)
+      ctx.lineTo(cx, cy + 3); ctx.lineTo(cx - 3, cy)
       ctx.closePath(); ctx.fill()
     }
   }
@@ -184,23 +212,32 @@ function draw() {
   // セル描画
   for (let f = 0; f < frameCount.value; f++) {
     const frame = getDisplayFrame(f)
-    const isKF = isKfMode && kfSet.has(f)
-    const isInterp = isKfMode && !isKF
-
     for (let l = 0; l < ledCount.value; l++) {
       const led = frame?.leds[l]
       if (!led) continue
       const x = LABEL_W + f * CELL_W
       const y = HEADER_H + l * CELL_H
 
+      // セル背景色
       const isBlack = led.r === 0 && led.g === 0 && led.b === 0
       ctx.fillStyle = isBlack ? '#1a1a1a' : `rgb(${led.r},${led.g},${led.b})`
       ctx.fillRect(x + 1, y + 1, CELL_W - 2, CELL_H - 2)
 
-      // 補間セル：半透明オーバーレイで区別
-      if (isInterp) {
-        ctx.fillStyle = 'rgba(0,0,0,0.35)'
-        ctx.fillRect(x + 1, y + 1, CELL_W - 2, CELL_H - 2)
+      if (isKfMode) {
+        const kfKey = `${l}:${f}`
+        if (cellKfSet.has(kfKey)) {
+          // KFセル：右上隅に橙◆マーカー
+          ctx.fillStyle = '#f0a020'
+          const mx = x + CELL_W - 5; const my = y + 5
+          ctx.beginPath()
+          ctx.moveTo(mx, my - 4); ctx.lineTo(mx + 3, my)
+          ctx.lineTo(mx, my + 4); ctx.lineTo(mx - 3, my)
+          ctx.closePath(); ctx.fill()
+        } else {
+          // 非KFセル（補間）：暗いオーバーレイ
+          ctx.fillStyle = 'rgba(0,0,0,0.38)'
+          ctx.fillRect(x + 1, y + 1, CELL_W - 2, CELL_H - 2)
+        }
       }
     }
   }
@@ -266,7 +303,7 @@ function onMouseUp(e) {
   selection.value = sel
   selectedFrame.value = sel.frameStart
 
-  // ピッカーに選択先頭セルの色を反映（getDisplayFrame を使用）
+  // ピッカーに選択先頭セルの表示色を反映
   const frame = getDisplayFrame(sel.frameStart)
   const led = frame?.leds[sel.ledStart]
   if (led) pickerRgb.value = { r: led.r, g: led.g, b: led.b }
@@ -290,6 +327,7 @@ function onColorChange({ r, g, b }) {
   pickerRgb.value = { r, g, b }
   const sel = selection.value
   if (!sel) return
+  // KFモード時：選択範囲の全セルをKFとして色を設定
   fillRange(sel.frameStart, sel.frameEnd, sel.ledStart, sel.ledEnd, r, g, b)
   draw()
 }
@@ -306,7 +344,7 @@ function onDeleteFrame() {
   if (selectedFrame.value === null) return
   deleteFrame(selectedFrame.value)
   if (selectedFrame.value >= frameCount.value) selectedFrame.value = frameCount.value - 1
-  draw()
+  selection.value = null; draw()
 }
 function onInsertFrame() {
   if (selectedFrame.value === null) return
@@ -315,23 +353,47 @@ function onInsertFrame() {
 
 function toggleEditMode() {
   setEditMode(editMode.value === 'frames' ? 'keyframes' : 'frames')
+  selection.value = null; draw()
+}
+
+// 選択セルをKFとして設定（現在の補間色で確定）
+function onMarkAsKf() {
+  const sel = selection.value
+  if (!sel || editMode.value !== 'keyframes') return
+  for (let f = sel.frameStart; f <= sel.frameEnd; f++) {
+    const frame = getDisplayFrame(f)
+    for (let l = sel.ledStart; l <= sel.ledEnd; l++) {
+      const led = frame?.leds[l] ?? { r: 0, g: 0, b: 0 }
+      setKfCell(l, f, led.r, led.g, led.b)
+    }
+  }
   draw()
 }
 
-function onRemoveKeyframe() {
-  if (selectedFrame.value === null) return
-  removeKeyframe(selectedFrame.value); draw()
+// 選択セルのKFを解除（補間に戻す）
+function onRemoveKfCells() {
+  const sel = selection.value
+  if (!sel || editMode.value !== 'keyframes') return
+  removeKfCells(sel.ledStart, sel.ledEnd, sel.frameStart, sel.frameEnd)
+  // ピッカーを再計算値で更新
+  const frame = getDisplayFrame(sel.frameStart)
+  const led = frame?.leds[sel.ledStart]
+  if (led) pickerRgb.value = { r: led.r, g: led.g, b: led.b }
+  draw()
 }
 
+// 補間タイプを選択範囲のKFセルに設定
 function onSetInterp(type) {
-  if (selectedFrame.value === null) return
-  setKeyframeInterpolation(selectedFrame.value, type); draw()
+  const sel = selection.value
+  if (!sel) return
+  setKfCellInterpRange(sel.ledStart, sel.ledEnd, sel.frameStart, sel.frameEnd, type)
+  draw()
 }
 
-// 変換（即時描画）
-function onReverseFrames()  { reverseFrames(); draw() }
-function onMirrorLeds()     { mirrorLeds(); draw() }
-function onInvertColors()   { invertColors(); draw() }
+// 変換（useProjectの関数 + 描画更新）
+function onReverseFrames() { reverseFrames(); draw() }
+function onMirrorLeds()    { mirrorLeds(); draw() }
+function onInvertColors()  { invertColors(); draw() }
 
 function updateCanvas() {
   const canvas = canvasRef.value
@@ -344,7 +406,7 @@ function updateCanvas() {
 watch(
   [
     () => project.pattern.frames,
-    () => project.pattern.keyframes,
+    () => project.pattern.kf_cells,
     () => project.pattern.edit_mode,
     () => project.layout.led_count,
     frameCount, ledCount,
@@ -400,7 +462,7 @@ onMounted(() => { updateCanvas() })
   flex-shrink: 0; overflow-x: auto;
 }
 
-.color-bar-label { font-size: 11px; color: #888; white-space: nowrap; min-width: 140px; }
+.color-bar-label { font-size: 11px; color: #888; white-space: nowrap; min-width: 160px; }
 
 .clear-btn {
   margin-left: auto; padding: 3px 10px; background: #333; color: #999;
