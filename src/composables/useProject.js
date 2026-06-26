@@ -315,19 +315,51 @@ function applyLayoutPreset(type, opts = {}) {
   if (type === 'linear') {
     leds.forEach((l, i) => { l.x = 50 + i * sp; l.y = 150 })
   } else if (type === 'square_frame') {
-    // N個のLEDを正方形の枠（周囲）に等間隔配置
-    const s = opts.size ?? Math.max(80, n * sp / 4)
+    const s = opts.size ?? Math.max(80, (Math.ceil(Math.max(n - 4, 0) / 4) + 1) * sp)
     const ox = 60; const oy = 60
-    leds.forEach((l, i) => {
-      const t4 = (i / n) * 4
-      const side = Math.floor(t4); const frac = t4 - side
-      switch (side % 4) {
-        case 0: l.x = Math.round(ox + frac * s);     l.y = Math.round(oy);         break // 上辺
-        case 1: l.x = Math.round(ox + s);            l.y = Math.round(oy + frac * s); break // 右辺
-        case 2: l.x = Math.round(ox + s - frac * s); l.y = Math.round(oy + s);     break // 下辺
-        case 3: l.x = Math.round(ox);                l.y = Math.round(oy + s - frac * s); break // 左辺
+    const pos = []
+
+    if (n <= 4) {
+      // 4以下：コーナーなし、均等位置
+      if (n === 1) {
+        pos.push({ x: ox + s / 2, y: oy })
+      } else if (n === 2) {
+        pos.push({ x: ox,         y: oy + s / 2 })
+        pos.push({ x: ox + s,     y: oy + s / 2 })
+      } else if (n === 3) {
+        pos.push({ x: ox,         y: oy + s / 2 })
+        pos.push({ x: ox + s / 2, y: oy })
+        pos.push({ x: ox + s,     y: oy + s / 2 })
+      } else { // n === 4：4隅
+        pos.push({ x: ox,     y: oy })
+        pos.push({ x: ox + s, y: oy })
+        pos.push({ x: ox + s, y: oy + s })
+        pos.push({ x: ox,     y: oy + s })
       }
-    })
+    } else {
+      // N > 4：4隅 + 残りを均等配置
+      const rem = (n - 4) % 4
+      const base = Math.floor((n - 4) / 4)
+      // rem に応じた各辺(上,右,下,左)への追加LED数
+      const extras = [[0,0,0,0],[1,0,0,0],[0,1,0,1],[1,1,0,1]][rem]
+      const perSide = extras.map(e => base + e)
+      const corners = [
+        { x: ox,     y: oy     }, // TL
+        { x: ox + s, y: oy     }, // TR
+        { x: ox + s, y: oy + s }, // BR
+        { x: ox,     y: oy + s }, // BL
+      ]
+      for (let side = 0; side < 4; side++) {
+        pos.push(corners[side])
+        const cnt = perSide[side]
+        const c0 = corners[side]; const c1 = corners[(side + 1) % 4]
+        for (let j = 0; j < cnt; j++) {
+          const frac = (j + 1) / (cnt + 1)
+          pos.push({ x: c0.x + frac * (c1.x - c0.x), y: c0.y + frac * (c1.y - c0.y) })
+        }
+      }
+    }
+    pos.forEach((p, i) => { leds[i].x = Math.round(p.x); leds[i].y = Math.round(p.y) })
   } else if (type === 'grid') {
     const cols = opts.cols ?? Math.ceil(Math.sqrt(n))
     leds.forEach((l, i) => { l.x = 50 + (i % cols) * sp; l.y = 50 + Math.floor(i / cols) * sp })
