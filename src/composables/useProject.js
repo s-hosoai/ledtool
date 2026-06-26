@@ -39,7 +39,34 @@ const state = reactive({
   project: createNewProject(),
   errorMessage: null,
   hasCopied: false,
+  canUndo: false,
 })
+
+// ---- Undo 履歴 ----
+const _history = []
+const MAX_HISTORY = 50
+
+function saveSnapshot() {
+  _history.push({
+    frames: JSON.parse(JSON.stringify(state.project.pattern.frames)),
+    kf_cells: JSON.parse(JSON.stringify(state.project.pattern.kf_cells)),
+  })
+  if (_history.length > MAX_HISTORY) _history.shift()
+  state.canUndo = true
+}
+
+function undo() {
+  if (_history.length === 0) return
+  const snap = _history.pop()
+  state.project.pattern.frames = snap.frames
+  state.project.pattern.kf_cells = snap.kf_cells
+  state.canUndo = _history.length > 0
+}
+
+function _clearHistory() {
+  _history.length = 0
+  state.canUndo = false
+}
 
 // ---- Per-cell キーフレーム補間 ----
 
@@ -456,6 +483,7 @@ function loadProject(jsonStr) {
     }
     Object.assign(state.project, obj)
     state.errorMessage = null
+    _clearHistory()
   } catch (e) {
     state.errorMessage = `読み込みエラー：${e.message}`
   }
@@ -509,6 +537,7 @@ function clearError() { state.errorMessage = null }
 function newProject() {
   Object.assign(state.project, createNewProject())
   state.errorMessage = null
+  _clearHistory()
 }
 
 export function useProject() {
@@ -521,8 +550,11 @@ export function useProject() {
     insertFrame,
     deleteFrame,
     hasCopied: computed(() => state.hasCopied),
+    canUndo: computed(() => state.canUndo),
     copyRange,
     pasteAt,
+    saveSnapshot,
+    undo,
     setLedCount,
     setFps,
     setLoop,
